@@ -57,28 +57,43 @@ class ProductScraperService
             }
 
             // Parse HTML
-            $crawler = new Crawler($response->body());
-            
+            $html = $response->body();
+            $crawler = new Crawler($html);
+
+            // Check if the page uses JavaScript frameworks
+            $usesJavaScript = $this->detectJavaScriptFramework($html);
+            if ($usesJavaScript) {
+                \Log::warning("Website {$supplier->url} uses JavaScript framework: {$usesJavaScript}. Products may not be visible in HTML.");
+            }
+
             // Auto-detect or use provided selector
             $selector = $supplier->css_selector;
-            
+
             if (!$selector) {
                 $selector = $this->autoDetectSelector($crawler);
-                
+
                 if (!$selector) {
+                    // Save HTML for debugging
+                    $this->saveDebugHtml($supplier, $html);
+
                     return [
                         'success' => false,
-                        'message' => 'Nije moguće automatski pronaći proizvode na stranici.',
+                        'message' => 'Nije moguće automatski pronaći proizvode na stranici.' .
+                                   ($usesJavaScript ? " Stranica koristi {$usesJavaScript} - proizvodi se možda učitavaju preko JavaScript-a." : ''),
                     ];
                 }
             }
-            
+
             $productElements = $crawler->filter($selector);
 
             if ($productElements->count() === 0) {
+                // Save HTML for debugging
+                $this->saveDebugHtml($supplier, $html);
+
                 return [
                     'success' => false,
-                    'message' => 'Nije pronađen nijedan proizvod sa selektorom: ' . $selector,
+                    'message' => 'Nije pronađen nijedan proizvod sa selektorom: ' . $selector .
+                               ($usesJavaScript ? " (Stranica koristi {$usesJavaScript})" : ''),
                 ];
             }
 
@@ -128,28 +143,57 @@ class ProductScraperService
      */
     protected function autoDetectSelector(Crawler $crawler)
     {
+        // Expanded list of common product selectors
         $selectors = [
+            // Common product classes
             '.product',
             '.product-item',
             '.product-card',
             '.product-box',
-            '.item-product',
-            '.item',
-            '.grid-item',
             '.product-grid-item',
-            '[data-product]',
-            '[data-product-id]',
-            'article.product',
-            'div.product',
+            '.product-list-item',
+            '.product-wrapper',
+            '.item-product',
+            '.grid-item',
             '.catalog-item',
             '.shop-item',
-            '.product-wrapper',
+
+            // E-commerce platform specific
+            '.woocommerce-LoopProduct-link',
+            '.product-small',
+            '.type-product',
+            '.product-container',
+
+            // Data attributes
+            '[data-product]',
+            '[data-product-id]',
+            '[data-testid*="product"]',
+
+            // Semantic HTML
+            'article.product',
+            'div.product',
+            'li.product',
+
+            // More generic but common
+            '.item',
+            'article',
+            '.card',
+            '.box',
+
+            // Shopify
+            '.product-card-wrapper',
+            '.grid__item',
+
+            // Magento
+            '.product-item-info',
+            '.product-item-details',
         ];
 
         foreach ($selectors as $selector) {
             try {
                 $count = $crawler->filter($selector)->count();
-                if ($count >= 3) { // At least 3 products found
+                // Lowered threshold to 2 products for better detection
+                if ($count >= 2) {
                     \Log::info("Auto-detected selector: {$selector} ({$count} products)");
                     return $selector;
                 }
@@ -159,6 +203,58 @@ class ProductScraperService
         }
 
         return null;
+    }
+
+    /**
+     * Detect if page uses JavaScript frameworks
+     */
+    protected function detectJavaScriptFramework($html)
+    {
+        // Check for React
+        if (preg_match('/__NEXT_DATA__|nextjs|_next\/static|react/i', $html)) {
+            return 'Next.js/React';
+        }
+
+        // Check for Vue
+        if (preg_match('/vue\.js|__NUXT__|nuxt/i', $html)) {
+            return 'Vue.js/Nuxt';
+        }
+
+        // Check for Angular
+        if (preg_match('/ng-app|angular/i', $html)) {
+            return 'Angular';
+        }
+
+        // Check for common SPA indicators
+        if (preg_match('/<div[^>]+id=["\']root["\']|<div[^>]+id=["\']app["\']/', $html) &&
+            strlen($html) < 10000) { // Small HTML usually means SPA
+            return 'JavaScript SPA';
+        }
+
+        return null;
+    }
+
+    /**
+     * Save HTML for debugging purposes
+     */
+    protected function saveDebugHtml($supplier, $html)
+    {
+        try {
+            $debugPath = storage_path('logs/scraper-debug');
+
+            if (!file_exists($debugPath)) {
+                mkdir($debugPath, 0755, true);
+            }
+
+            $filename = 'debug-' . Str::slug($supplier->name) . '-' . date('Y-m-d-H-i-s') . '.html';
+            $filepath = $debugPath . '/' . $filename;
+
+            file_put_contents($filepath, $html);
+
+            \Log::info("Saved debug HTML for {$supplier->name} to {$filepath}");
+        } catch (\Exception $e) {
+            \Log::error("Failed to save debug HTML: " . $e->getMessage());
+        }
     }
 
     /**
