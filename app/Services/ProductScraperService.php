@@ -43,6 +43,7 @@ class ProductScraperService
         try {
             // Fetch the website
             $response = Http::timeout(30)
+                ->withoutVerifying()
                 ->withHeaders([
                     'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 ])
